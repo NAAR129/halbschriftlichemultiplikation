@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Halbschriftliche Multiplikation – Flächenmodell</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 18px; color:#111; }
+    h1 { font-size: 18px; margin: 0 0 10px; }
+    .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px 14px; box-shadow: 0 1px 0 rgba(0,0,0,.03); }
+    .controls { min-width: 320px; flex: 1 1 340px; }
+    .viz { min-width: 320px; flex: 2 1 520px; }
+    label { display:block; font-size: 13px; margin: 10px 0 4px; color:#333; }
+    input[type="number"] { width: 120px; padding: 6px 8px; font-size: 14px; }
+    input[type="range"] { width: 100%; }
+    .line { display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
+    .btns { display:flex; gap: 10px; margin-top: 12px; }
+    button { padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; background:#fafafa; cursor:pointer; }
+    button:hover { background:#f2f2f2; }
+    .warn { color:#b00020; font-size: 13px; margin-top: 10px; }
+    .eq { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .mini { border:1px solid #eee; border-radius: 8px; padding: 8px; background:#fff; }
+    canvas { width: 100%; height: 420px; border: 1px solid #ddd; border-radius: 10px; background: #fff; }
+    .muted { color:#555; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Halbschriftliche Multiplikation (Flächenmodell, 2×2-Zerlegung)</h1>
+
+  <div class="row">
+    <div class="card controls">
+      <div class="line">
+        <div>
+          <label for="a">Zahl a</label>
+          <input id="a" type="number" min="0" step="1" value="47" />
+        </div>
+        <div>
+          <label for="b">Zahl b</label>
+          <input id="b" type="number" min="0" step="1" value="36" />
+        </div>
+      </div>
+
+      <label for="a1">Zerlegung a = a₁ + a₂ (Slider: a₁)</label>
+      <input id="a1" type="range" min="0" max="47" value="40" />
+      <div class="line muted">
+        <div>a₁: <span id="a1v">40</span></div>
+        <div>a₂: <span id="a2v">7</span></div>
+      </div>
+
+      <label for="b1">Zerlegung b = b₁ + b₂ (Slider: b₁)</label>
+      <input id="b1" type="range" min="0" max="36" value="30" />
+      <div class="line muted">
+        <div>b₁: <span id="b1v">30</span></div>
+        <div>b₂: <span id="b2v">6</span></div>
+      </div>
+
+      <div class="btns">
+        <button id="random">Neue Aufgabe (zufällig)</button>
+        <button id="resetSplit">Zerlegung „rund“</button>
+      </div>
+
+      <div id="warn" class="warn"></div>
+
+      <div class="grid">
+        <div class="mini">
+          <div class="muted">Hilfsaufgaben</div>
+          <div class="eq" id="partials"></div>
+        </div>
+        <div class="mini">
+          <div class="muted">Summe</div>
+          <div class="eq" id="sumline"></div>
+        </div>
+      </div>
+
+      <div class="mini" style="margin-top:10px;">
+        <div class="muted">Regel</div>
+        <div class="muted">
+          Wenn a &lt; 10 bzw. b &lt; 10: keine Zerlegung (a₁=0 bzw. b₁=0; Slider deaktiviert).
+        </div>
+      </div>
+    </div>
+
+    <div class="card viz">
+      <canvas id="cnv" width="900" height="520"></canvas>
+      <div class="muted" style="margin-top:8px;">
+        Farbcodierung: a₁·b₁ (blau), a₂·b₁ (grün), a₁·b₂ (orange), a₂·b₂ (rot)
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const elA = document.getElementById('a');
+  const elB = document.getElementById('b');
+  const elA1 = document.getElementById('a1');
+  const elB1 = document.getElementById('b1');
+
+  const a1v = document.getElementById('a1v');
+  const a2v = document.getElementById('a2v');
+  const b1v = document.getElementById('b1v');
+  const b2v = document.getElementById('b2v');
+
+  const warn = document.getElementById('warn');
+  const partials = document.getElementById('partials');
+  const sumline = document.getElementById('sumline');
+
+  const cnv = document.getElementById('cnv');
+  const ctx = cnv.getContext('2d');
+
+  const colors = {
+    a1b1: '#4e79a7', // blau
+    a2b1: '#59a14f', // grün
+    a1b2: '#f28e2b', // orange
+    a2b2: '#e15759'  // rot
+  };
+
+  function clampInt(x, lo, hi){
+    x = Number.isFinite(x) ? Math.floor(x) : lo;
+    return Math.max(lo, Math.min(hi, x));
+  }
+
+  function niceSplit(x){
+    x = Math.max(0, Math.floor(x));
+    if (x < 10) return 0;           // einstellige Zahl: keine Zerlegung
+    if (x < 20) return 10;
+    return Math.floor(x/10)*10;
+  }
+
+  function readState(){
+    const a = clampInt(parseFloat(elA.value), 0, 999999);
+    const b = clampInt(parseFloat(elB.value), 0, 999999);
+
+    const splitAAllowed = (a >= 10);
+    const splitBAllowed = (b >= 10);
+
+    // Sliderbereiche anpassen
+    elA1.max = String(a);
+    elB1.max = String(b);
+
+    let a1 = clampInt(parseFloat(elA1.value), 0, a);
+    let b1 = clampInt(parseFloat(elB1.value), 0, b);
+
+    // Einzelliger Fall: keine Zerlegung zulassen
+    if (!splitAAllowed) a1 = 0;
+    if (!splitBAllowed) b1 = 0;
+
+    // enforced values zurückschreiben + Slider deaktivieren
+    if (!splitAAllowed) elA1.value = "0";
+    if (!splitBAllowed) elB1.value = "0";
+    elA1.disabled = !splitAAllowed;
+    elB1.disabled = !splitBAllowed;
+
+    const a2 = a - a1;
+    const b2 = b - b1;
+
+    return {a,b,a1,a2,b1,b2, splitAAllowed, splitBAllowed};
+  }
+
+  function setSplitRounded(){
+    const a = clampInt(parseFloat(elA.value), 0, 999999);
+    const b = clampInt(parseFloat(elB.value), 0, 999999);
+    const a1 = clampInt(niceSplit(a), 0, a);
+    const b1 = clampInt(niceSplit(b), 0, b);
+    elA1.max = String(a);
+    elB1.max = String(b);
+    elA1.value = String(a1);
+    elB1.value = String(b1);
+    render();
+  }
+
+  function setRandomTask(){
+    const a = Math.floor(2 + Math.random()*98); // 2..99
+    const b = Math.floor(2 + Math.random()*98);
+    elA.value = String(a);
+    elB.value = String(b);
+    elA1.max = String(a);
+    elB1.max = String(b);
+    elA1.value = String(niceSplit(a));
+    elB1.value = String(niceSplit(b));
+    render();
+  }
+
+  function drawAxesAndGrid(x0,y0,rectW,rectH,stepPx){
+    // Koordinatensystem: Achsen am linken/unten Rand des Rechtecks + Rasterlinien
+    ctx.save();
+    ctx.lineWidth = 1;
+
+    // Grid
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    for (let x = x0; x <= x0+rectW+0.5; x += stepPx){
+      ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y0+rectH); ctx.stroke();
+    }
+    for (let y = y0; y <= y0+rectH+0.5; y += stepPx){
+      ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0+rectW, y); ctx.stroke();
+    }
+
+    // Axes (x-axis bottom, y-axis left)
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0+rectH); ctx.lineTo(x0+rectW, y0+rectH); // x-axis
+    ctx.moveTo(x0, y0);       ctx.lineTo(x0, y0+rectH);       // y-axis
+    ctx.stroke();
+
+    // Arrow heads
+    const ah = 8;
+    // x arrow
+    ctx.beginPath();
+    ctx.moveTo(x0+rectW, y0+rectH);
+    ctx.lineTo(x0+rectW-ah, y0+rectH-ah/2);
+    ctx.lineTo(x0+rectW-ah, y0+rectH+ah/2);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fill();
+    // y arrow
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x0-ah/2, y0+ah);
+    ctx.lineTo(x0+ah/2, y0+ah);
+    ctx.closePath();
+    ctx.fill();
+
+    // axis labels
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.fillText('x', x0+rectW+10, y0+rectH+4);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText('y', x0-4, y0-18);
+
+    ctx.restore();
+  }
+
+  function draw(){
+    const {a,b,a1,a2,b1,b2, splitAAllowed, splitBAllowed} = readState();
+
+    // Textfelder
+    a1v.textContent = a1;
+    a2v.textContent = a2;
+    b1v.textContent = b1;
+    b2v.textContent = b2;
+
+    warn.textContent = '';
+    if (!splitAAllowed && a > 0 && a < 10) warn.textContent += 'a ist einstelllig → keine Zerlegung von a. ';
+    if (!splitBAllowed && b > 0 && b < 10) warn.textContent += 'b ist einstelllig → keine Zerlegung von b. ';
+    if (a === 0 || b === 0) warn.textContent += 'Hinweis: Bei 0 wird die Fläche zu 0.';
+
+    // Teilprodukte
+    const p11 = a1*b1;
+    const p21 = a2*b1;
+    const p12 = a1*b2;
+    const p22 = a2*b2;
+    const total = a*b;
+
+    partials.innerHTML =
+      `${a1}·${b1} = ${p11}<br>` +
+      `${a2}·${b1} = ${p21}<br>` +
+      `${a1}·${b2} = ${p12}<br>` +
+      `${a2}·${b2} = ${p22}`;
+
+    sumline.innerHTML =
+      `(${a1}+${a2})·(${b1}+${b2}) = ${a}·${b} = ${total}<br>` +
+      `${p11} + ${p21} + ${p12} + ${p22} = ${total}`;
+
+    // Canvas Layout
+    ctx.clearRect(0,0,cnv.width,cnv.height);
+
+    const margin = 50;
+    const top = 55;
+    const left = 85;
+    const W = cnv.width - left - margin;
+    const H = cnv.height - top - margin;
+
+    // Skalierung: Seiten proportional zu a,b
+    const sx = W / Math.max(a,1);
+    const sy = H / Math.max(b,1);
+    const s = Math.min(sx, sy);
+
+    const rectW = a * s;
+    const rectH = b * s;
+
+    const x0 = left;
+    const y0 = top + (H - rectH); // unten ausrichten
+
+    // Teilbreiten / -höhen
+    const w1 = a1*s, w2 = a2*s;
+    const h1 = b1*s, h2 = b2*s;
+
+    // Koordinatensystem + Raster (Schrittweite: 1 Einheit, aber nicht zu dicht)
+    // Wir wählen eine "Einheiten-Schrittweite" abhängig von s:
+    // mindestens 1, ansonsten 2/5/10 Einheiten, damit Raster gut lesbar bleibt.
+    const unitStep = (function(){
+      if (s >= 35) return 1;
+      if (s >= 18) return 2;
+      if (s >= 10) return 5;
+      return 10;
+    })();
+    drawAxesAndGrid(x0, y0, rectW, rectH, unitStep*s);
+
+    // Umrandung
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = '#222';
+    ctx.strokeRect(x0, y0, rectW, rectH);
+
+    // Teilflächen: b1 unten, b2 oben
+    const yTop = y0;
+    const yMid = y0 + h2;
+    const xMid = x0 + w1;
+
+    function fillRect(x,y,w,h,c){
+      if (w<=0 || h<=0) return;
+      ctx.fillStyle = c;
+      ctx.globalAlpha = 0.35;
+      ctx.fillRect(x,y,w,h);
+      ctx.globalAlpha = 1.0;
+    }
+
+    fillRect(x0,   yTop, w1, h2, colors.a1b2); // oben links
+    fillRect(xMid, yTop, w2, h2, colors.a2b2); // oben rechts
+    fillRect(x0,   yMid, w1, h1, colors.a1b1); // unten links
+    fillRect(xMid, yMid, w2, h1, colors.a2b1); // unten rechts
+
+    // Trennlinien
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.moveTo(xMid, y0); ctx.lineTo(xMid, y0+rectH);
+    ctx.moveTo(x0, yMid); ctx.lineTo(x0+rectW, yMid);
+    ctx.stroke();
+
+    // Beschriftungen
+    ctx.fillStyle = '#111';
+    ctx.font = '16px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+
+    function drawCenteredText(t, x, y){
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(t, x, y);
+    }
+
+    // a-Aufteilung unten
+    drawCenteredText(`${a1}`, x0 + w1/2, y0 + rectH + 22);
+    drawCenteredText(`${a2}`, xMid + w2/2, y0 + rectH + 22);
+    drawCenteredText(`a = ${a}`, x0 + rectW/2, y0 + rectH + 44);
+
+    // b-Aufteilung links (oben b2, unten b1)
+    drawCenteredText(`${b2}`, x0 - 35, yTop + h2/2);
+    drawCenteredText(`${b1}`, x0 - 35, yMid + h1/2);
+    drawCenteredText(`b = ${b}`, x0 - 35, y0 + rectH/2 - 26);
+
+    // Teilprodukt-Labels
+    ctx.font = '15px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
+    function labelInRect(x,y,w,h,t){
+      if (w<48 || h<28) return;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#111';
+      ctx.fillText(t, x + w/2, y + h/2);
+    }
+    labelInRect(x0,   yMid, w1, h1, `${a1}·${b1}=${a1*b1}`);
+    labelInRect(xMid, yMid, w2, h1, `${a2}·${b1}=${a2*b1}`);
+    labelInRect(x0,   yTop, w1, h2, `${a1}·${b2}=${a1*b2}`);
+    labelInRect(xMid, yTop, w2, h2, `${a2}·${b2}=${a2*b2}`);
+
+    // Titel
+    ctx.font = '18px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#111';
+    ctx.fillText(`Flächenmodell: (${a1}+${a2}) · (${b1}+${b2}) = ${a} · ${b} = ${a*b}`, 60, 28);
+  }
+
+  function render(){
+    // Slider max zu a/b passen lassen, a1/b1 clampen
+    const a = clampInt(parseFloat(elA.value), 0, 999999);
+    const b = clampInt(parseFloat(elB.value), 0, 999999);
+    elA1.max = String(a);
+    elB1.max = String(b);
+    elA1.value = String(clampInt(parseFloat(elA1.value), 0, a));
+    elB1.value = String(clampInt(parseFloat(elB1.value), 0, b));
+    draw();
+  }
+
+  // Events
+  elA.addEventListener('input', render);
+  elB.addEventListener('input', render);
+  elA1.addEventListener('input', render);
+  elB1.addEventListener('input', render);
+  document.getElementById('resetSplit').addEventListener('click', setSplitRounded);
+  document.getElementById('random').addEventListener('click', setRandomTask);
+
+  // init
+  setSplitRounded();
+})();
+</script>
+</body>
+</html>
